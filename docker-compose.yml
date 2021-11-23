@@ -1,0 +1,62 @@
+# vim: set softtabstop=2 tabstop=2 shiftwidth=2 expandtab autoindent smartindent syntax=yaml:
+# To execute this docker-compose yml file use `docker-compose -f <file_name> up`
+# Add the `-d` flag at the end for detached execution
+version: "3.8"
+
+services:
+  firefox-standalone:
+    image: selenium/standalone-firefox:94.0
+    volumes:
+      - /dev/shm:/dev/shm
+    depends_on:
+      - client-portal
+    ports:
+      - "4444:4444"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4444"]
+      start_period: 10s
+
+  client-portal:
+    privileged: true
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+      - 8.8.4.4
+    build:
+      context: ./
+      #args:
+        #PACKAGE: clientportal.beta.gw.zip
+        #API_URL: 2.api.ibkr.com
+        #PACKAGE: clientportal.gw.zip # default
+        #API_URL: api.ibkr.com # default
+    image: client-portal
+    ports:
+        - "5000:5000"
+    healthcheck:
+      test: ["CMD", "curl", "-kf", "https://localhost:5000/"]
+      start_period: 15s
+    volumes:
+      - "${PWD}/logs:/client-portal/logs:rw"
+
+  auto-login:
+    privileged: true # Is there a more secure way of allowing bind mounts?
+    build:
+      context: ./
+      dockerfile: auto-login.dockerfile
+
+    #command:
+    #  - "--debug"
+    volumes:
+      - "${PWD}/img:/auto-login/img:rw"
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - label=disable
+    environment:
+      IBKR_USER: "${IBKR_USER}"
+      IBKR_PASSWORD: "${IBKR_PASSWORD}"
+    image: auto-login
+    depends_on:
+      - client-portal
+      - firefox-standalone
