@@ -1,58 +1,75 @@
 # vim: set softtabstop=2 tabstop=2 shiftwidth=2 expandtab autoindent smartindent syntax=yaml:
-# To execute this docker-compose yml file use `docker-compose -f <file_name> up`
-# Add the `-d` flag at the end for detached execution
 version: "3.8"
 
 services:
   firefox-standalone:
-    image: selenium/standalone-firefox:94.0
+    image: selenium/standalone-firefox:109.0
+    environment:
+      # https://github.com/SeleniumHQ/docker-selenium/blob/c6df1ab8dc6a5aca05c163c429a062ada1d79c51/README.md#grid-url-and-session-timeout
+      SE_NODE_SESSION_TIMEOUT: 90
+      SE_SESSION_REQUEST_TIMEOUT: 90
     volumes:
       - /dev/shm:/dev/shm
     depends_on:
       - client-portal
     ports:
-      - "4444:4444"
+      - "127.0.0.1:4444:4444"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4444"]
-      start_period: 10s
+      test: ["CMD", "curl", "--fail", "http://localhost:4444/readyz"]
+      start_period: 15s
 
   client-portal:
-    privileged: true
     dns:
       - 1.1.1.1
       - 8.8.8.8
       - 8.8.4.4
     build:
       context: ./
-      #args:
-        #PACKAGE: clientportal.beta.gw.zip
-        #API_URL: 2.api.ibkr.com
+      args:
+        PACKAGE: clientportal.beta.gw.zip
+        API_URL: "${API_URL}"
         #PACKAGE: clientportal.gw.zip # default
         #API_URL: api.ibkr.com # default
     image: client-portal
     ports:
-        - "5000:5000"
+      - "127.0.0.1:5000:5000"
+      - "127.0.0.1:8778:8778"
     healthcheck:
-      test: ["CMD", "curl", "-kf", "https://localhost:5000/"]
+      test: ["CMD", "curl", "-kf", "https://localhost:5000/demo#/"]
       start_period: 15s
     volumes:
-      - "${PWD}/logs:/client-portal/logs:rw"
+      - "${PWD}/logs:/client-portal/logs:z"
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
+
+  jolokia-exporter:
+    image: scalify/jolokia_exporter
+    volumes:
+      - "./jolokia-exporter.yaml:/jolokia-exporter.yaml:z"
+    command:
+    - "export"
+    - "/jolokia-exporter.yaml"
+    - "http://client-portal:8778/jolokia/"
+    depends_on:
+      - client-portal
+    ports:
+      - "127.0.0.1:9422:9422"
 
   auto-login:
-    privileged: true # Is there a more secure way of allowing bind mounts?
+    # only while not using systemd files?
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 60s
     build:
       context: ./
-      dockerfile: auto-login.dockerfile
-
-    #command:
-    #  - "--debug"
+      dockerfile: ./auto-login.dockerfile
     volumes:
-      - "${PWD}/img:/auto-login/img:rw"
-    cap_add:
-      - SYS_ADMIN
-    security_opt:
-      - seccomp=unconfined
-      - label=disable
+      - "${PWD}/img:/auto-login/img:z"
     environment:
       IBKR_USER: "${IBKR_USER}"
       IBKR_PASSWORD: "${IBKR_PASSWORD}"
@@ -60,3 +77,12 @@ services:
     depends_on:
       - client-portal
       - firefox-standalone
+
+  prometheus:
+    image: prom/prometheus:v2.42.0
+    volumes:
+      - "./prometheus.yml:/etc/prometheus/prometheus.yml:z"
+    depends_on:
+      - jolokia-exporter
+    ports:
+      - "127.0.0.1:9090:9090"
